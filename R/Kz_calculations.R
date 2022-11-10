@@ -3,84 +3,7 @@ library(tidyverse)
 library(lubridate)
 library(ggplot2)
 library(zoo)
-
-#======== Kz - stability frequency =======
-# calculating Kz from temperature profiles
-dailyT <- read.delim(file = "daily_thermistor.txt") %>%
-  mutate(Date = ymd(Date)) %>%
-  pivot_wider(names_from = depth,
-              values_from = temp,
-              names_prefix = "wtr_")
-# hourlyT <-read.delim(file = "hourly_thermistor.txt") %>%
-#   mutate(datetime = ymd_hms(Hour)) %>%
-#   pivot_wider(names_from = depth,
-#               values_from = temp,
-#               names_prefix = "wtr_") %>%
-#   select(-Hour)
-
-# equation based on eq 10 in Saloranta et al (2007) parameterisation of vertical
-# diffusion and heat fluxes. Based on stability frequency as per
-# Hondzo & Stefan (1993)
-
-# K = alpha_k*(N2)^ -0.43
-# alpha_k = 0.00706 *(A)^0.56 - default parameterisation during ice-free periods
-
-#caluclate N2 - Brunt-vaisala frequency
-N2_daily <- rLakeAnalyzer::ts.buoyancy.freq(dailyT, at.thermo = F, seasonal = F)
-# N2_hourly <- rLakeAnalyzer::ts.buoyancy.freq(hourlyT, at.thermo = F, seasonal = F)
-
-
-# alpha-k
-
-A <- 0.031 # lake area in km2
-alpha_k <- 0.00706 * (A) ^ 0.56
-
-# set the lower limit for kz as the 
-N2min = 7*10^-5
-k_max <- alpha_k * (N2min) ^ -0.43
-
-
-
-# use alpha k and n2 to calculate K at each depth
-# method only valid for stability values great than N2min, so Kz cannot be 
-# greater than K_max
-K_daily <- N2_daily %>%
-  mutate(K_1.5 = alpha_k * (N2_1.5) ^ -0.43,
-         K_2.5 = alpha_k * (N2_2.5) ^ -0.43,
-         K_3.5 = alpha_k * (N2_3.5) ^ -0.43,
-         K_4.5 = alpha_k * (N2_4.5) ^ -0.43,
-         K_5.5 = alpha_k * (N2_5.5) ^ -0.43) %>%
-  mutate_at(c("K_1.5", "K_2.5", "K_3.5","K_4.5","K_5.5"),
-            funs(ifelse(.>= k_max, NA, .))) %>%
-  mutate_at(c("K_1.5", "K_2.5", "K_3.5","K_4.5","K_5.5"),
-            funs(./10000))
-
-# use alpha k and n2 to calculate K at each depth
-# K_hourly <- N2_hourly %>%
-#   mutate(K_1.5 = alpha_k * (N2_1.5) ^ -0.43,
-#          K_2.5 = alpha_k * (N2_2.5) ^ -0.43,
-#          K_3.5 = alpha_k * (N2_3.5) ^ -0.43,
-#          K_4.5 = alpha_k * (N2_4.5) ^ -0.43,
-#          K_5.5 = alpha_k * (N2_5.5) ^ -0.43) %>%
-#   mutate_at(c("K_1.5", "K_2.5", "K_3.5","K_4.5","K_5.5"),
-#             funs(ifelse(.>= k_max, NA, .))) %>%
-#   mutate_at(c("K_1.5", "K_2.5", "K_3.5","K_4.5","K_5.5"),
-#             funs(./10000))
-
-# output of values is in cm2 s-1 (I think)
-# want to convert this to m2 s-1 --> divide by 10000
-
-ggplot(K_daily, aes(x=Date, y = K_5.5)) +
-  geom_line() +
-  #scale_y_log10() +
-  #geom_hline(yintercept = log10(k_max), linetype = "dashed") +
-  scale_x_date(date_breaks = "3 months", date_labels = "%b %y") +
-  labs(x= "Date") +
-  coord_cartesian(xlim = c(ymd("2019-01-01"),
-                           ymd("2019-12-31"))) +
-  theme_bw()
-
-
+se <- function(x) sd(x) / sqrt(length(x))
 #=============================================#
 
 #======== Kz calculation - gradient flux method =====
@@ -101,23 +24,25 @@ ggplot(K_daily, aes(x=Date, y = K_5.5)) +
 # Ai is area at upper boundary of box i
 
 #  daily temperature profiles, wide format
-dailyT <- read.delim(file = "daily_thermistor.txt") %>%
-  mutate(Date = ymd(Date)) %>%#,
+dailyT <- temps %>% rename(Date = Date2, depth = Depth_m, temp = temp_c) %>%
+  mutate(depth = ifelse(depth == 0.1, 0, depth)) %>%
   pivot_wider(names_from = depth,
               values_from = temp,
-              names_prefix = "wtr_")
+              names_prefix = "wtr_") %>%
+  select(-wtr_3.3, -wtr_6.3, -wtr_8.9, -wtr_5.3) %>%
+  na.omit(.)
 
 # also need bathymetry
-depths <-  data.frame(depths = seq(0.5, 6.5, 0.5)) # this is the depths for the lake I looked at 
-depths_boundaries <- seq(0.5, 6.5, 1) # where I calculated Kz for
-depths_measurements <- seq(1, 6, 1) # the depths of the thermistors
+depths <-  data.frame(depths = seq(0, 10, 0.1)) # this is the depths for the lake I looked at 
+depths_boundaries <- seq(0, 10, 0.1) # where I calculated Kz for
+depths_measurements <- c(0,1.6,3.8,5,6.2,8,9) # the depths of the thermistors
 
 bathy <- read.delim(file = "bathymetry for analysis.txt") %>%
   full_join(depths,., by = "depths") %>%
   arrange(depths) %>%
   
   #interpolate the areas - you may not need/want these steps Ryan!
-  mutate(areas_int = ifelse(depths == 6.5, 0, 
+  mutate(areas_int = ifelse(depths == 9, 0, 
                             na.approx(areas, na.rm = F))) %>%
   # then extract the boxes needed anc calculate the volume based on these areas
   filter(depths %in% depths_boundaries) %>%
@@ -141,6 +66,7 @@ dT.dt <- function(var) {
 
 # calculate dT/dt for the water temperatures (numeric)
 dT_dt <- dailyT %>%
+  ungroup(.) %>%
   mutate_if(is.numeric, dT.dt)
 
 # then multiply the dT_dt by the volume of the box (Vi)
@@ -152,39 +78,50 @@ dT.dt.V <- function(column) {
   # e.g.for the temperatures measured at 1m this requires the volume layer between 0.5 and 1.5 m
   V <- bathy$volume[which(bathy$depths == as.numeric(gsub("wtr_", 
                                                           "", 
-                                                          substitute(column))) - 0.5)]
+                                                          substitute(column))))]
   dT_dt_V <- column * V
   return(dT_dt_V)
 }
 
 dT_dt_Vk <- dT_dt %>%
-  mutate_if(is.numeric, dT.dt.V)
+  mutate(wtr_0 = dT.dt.V(wtr_0),
+         wtr_1.6 = dT.dt.V(wtr_1.6),
+         wtr_3.8 = wtr_3.8*5976.76214,
+         wtr_5 = dT.dt.V(wtr_5),
+         wtr_6.2 = dT.dt.V(wtr_6.2),
+         wtr_8 = dT.dt.V(wtr_8),
+         wtr_9 = dT.dt.V(wtr_9))
 
 # for each depth you add up that layer plus the ones below
 sum_dT_dt_Vk <- 
   dT_dt_Vk %>%
-  select(Date, wtr_4, wtr_5, wtr_6) %>%
+  select(Date, wtr_6.2, wtr_8) %>%
   # writing over the columns but should be okay because don't then use
   # that column in the next mutate
-  mutate(wtr_4 = wtr_4 + wtr_5 + wtr_6, # box = 4 m
-         wtr_5 = wtr_5 + wtr_6,         # box = 5 m
-         wtr_6 = wtr_6)                # box = 6 m
+  mutate(wtr_6.2 = wtr_6.2 + wtr_8, # box = 4 m
+         wtr_8 = wtr_8)                # box = 6 m
 
 #=========================================#
 #### bottom of the equation ####
 # temperature gradient between the boxes
 # gradient between each layer divided by the height of the layer (1m)
-Gi <- data.frame(date = dailyT$Date,
-                 
-                 # dailyT[,2:6] is wtr_1:wtr_5
-                 # dailyT[,3:7] is wtr_2:wtr_6
-                 # so the calc is 1 - 2; 2 - 3; 3 - 4 etc..
-                 (dailyT[,2:6] - dailyT[,3:7])/1) # then divide by height of layer (ie 1m)
+# Gi <- data.frame(date = dailyT$Date,
+#                  
+#                  # dailyT[,2:6] is wtr_1:wtr_5
+#                  # dailyT[,3:7] is wtr_2:wtr_6
+#                  # so the calc is 1 - 2; 2 - 3; 3 - 4 etc..
+#                  (dailyT[,2:7] - dailyT[,3:8])/1) # then divide by height of layer (ie 1m)
+
+Gi <- dailyT %>% mutate(wtr_0 = wtr_0-wtr_1.6/1.6,
+                        wtr_1.6 = wtr_1.6-wtr_3.8/2.2,
+                        wtr_3.8 = wtr_3.8-wtr_5/1.2,
+                        wtr_5 = wtr_5-wtr_6.2/1.2,
+                        wtr_6.2 = wtr_6.2-wtr_8/1.8,
+                        wtr_8 = wtr_8-wtr_9/1) %>%
+  select(-wtr_9)
 
 # use the boundary values as column names
 # only 1.5 - 5.5m
-colnames(Gi) <- c("Date", paste0("wtr_", depths_boundaries[-c(1,7)])) 
-
 # multply the temperature gradient at the boundary by the area of that boundary
 Gi.Ai <- function(column) {
   # get the area for the right boundary
@@ -198,7 +135,7 @@ Gi_Ai <- Gi %>%
   as_tibble() %>%
   mutate_if(is.numeric, Gi.Ai) %>%
   # only valid for the deeper layers
-  select(Date, wtr_3.5, wtr_4.5, wtr_5.5)
+  select(Date, wtr_6.2, wtr_8)
 
 #=====================================#
 
@@ -213,7 +150,7 @@ colnames(Kz_ghf) <- c("Date", paste0("Kz_", gsub("wtr_", "", colnames(Gi_Ai[-1])
 
 # check the output
 Kz_ghf %>%
-  pivot_longer(cols = Kz_3.5:Kz_5.5,
+  pivot_longer(cols = Kz_6.2:Kz_8,
                names_to = "depth",
                names_prefix = "Kz_", 
                values_to = "Kz") %>%
@@ -232,17 +169,47 @@ Kz_ghf <- Kz_ghf %>%
                     rate_diffusion,
                     .)) 
 # check the output
-Kz_ghf %>%
-  pivot_longer(cols = Kz_3.5:Kz_5.5,
+p <- Kz_ghf %>%
+  select(-Kz_6.2) %>%
+  mutate(year = year(Date)) %>%
+  mutate(month = month(Date)) %>%
+  mutate(week = week(Date)) %>%
+  ungroup(.) %>%
+  mutate(Kz_8 = ifelse(is.infinite(Kz_8),NA, Kz_8),
+         Kz_8 = ifelse(Kz_8 <= 1.4e-7, NA, Kz_8)) %>%
+  dplyr::mutate_at(vars(Kz_8),funs(imputeTS::na_interpolation(., option = "linear"))) %>%
+  filter(month %in% c("5","6","7","8","9","10")) %>%
+  pivot_longer(cols = Kz_8,
                names_to = "depth",
                names_prefix = "Kz_", 
-               values_to = "Kz") %>%
-  ggplot(.) +
-  geom_point(aes(x=Date, y= log10(Kz), colour = depth)) +
-  scale_x_date(date_breaks = "6 months", date_labels = "%b%y") +
-  theme(axis.text.x = element_text(angle = 90))
+               values_to = "Kz")
+
+p_17_ts <- p %>% filter(year == "2017") %>%
+  group_by(week, year) %>%
+  summarize(Kz = mean(Kz, na.rm = F)) %>%
+  ggplot(., aes(x = week, y = log(Kz)))+
+  geom_line()+
+  geom_point(color = "dodgerblue4", size = 5)+
+  labs(title = "2017 Kz 8-9m")
+
+p_18_ts <- p %>% filter(year == "2018") %>%
+  group_by(week, year) %>%
+  summarize(Kz = mean(Kz, na.rm = F))%>%
+  ggplot(., aes(x = week, y = log(Kz)))+
+  geom_line()+
+  geom_point(color = "dodgerblue4", size = 5)+
+  labs(title = "2018 Kz 8-9m")
+
+p_box <- p %>% 
+  group_by(week, year) %>%
+  summarize(Kz = mean(Kz, na.rm = F))%>%
+  ggplot(., aes(x = week, y = log(Kz), group = year))+
+  geom_boxplot(aes(fill = as.character(year)))
+
+
 
 # write the Kz values
 write.table(Kz_ghf, sep = "\t", row.names = F, quote = F,
             file = "Kz (gradient heat flux method).txt")
+
 #============================================#
