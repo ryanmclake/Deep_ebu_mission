@@ -29,20 +29,20 @@ dailyT <- temps %>% rename(Date = Date2, depth = Depth_m, temp = temp_c) %>%
   pivot_wider(names_from = depth,
               values_from = temp,
               names_prefix = "wtr_") %>%
-  select(-wtr_3.3, -wtr_6.3, -wtr_8.9, -wtr_5.3) %>%
+  select(-wtr_3.3, -wtr_6.3, -wtr_5.3) %>%
   na.omit(.)
 
 # also need bathymetry
 depths <-  data.frame(depths = seq(0, 10, 0.1)) # this is the depths for the lake I looked at 
 depths_boundaries <- seq(0, 10, 0.1) # where I calculated Kz for
-depths_measurements <- c(0,1.6,3.8,5,6.2,8,9) # the depths of the thermistors
+depths_measurements <- c(0,1.6,3.8,5,6.2,8,9, 9.5) # the depths of the thermistors
 
 bathy <- read.delim(file = "bathymetry for analysis.txt") %>%
   full_join(depths,., by = "depths") %>%
   arrange(depths) %>%
   
   #interpolate the areas - you may not need/want these steps Ryan!
-  mutate(areas_int = ifelse(depths == 9, 0, 
+  mutate(areas_int = ifelse(depths == 10, 0, 
                             na.approx(areas, na.rm = F))) %>%
   # then extract the boxes needed anc calculate the volume based on these areas
   filter(depths %in% depths_boundaries) %>%
@@ -90,16 +90,19 @@ dT_dt_Vk <- dT_dt %>%
          wtr_5 = dT.dt.V(wtr_5),
          wtr_6.2 = dT.dt.V(wtr_6.2),
          wtr_8 = dT.dt.V(wtr_8),
-         wtr_9 = dT.dt.V(wtr_9))
+         wtr_9 = dT.dt.V(wtr_9),
+         wtr_9.5 = dT.dt.V(wtr_9.5))
 
 # for each depth you add up that layer plus the ones below
 sum_dT_dt_Vk <- 
   dT_dt_Vk %>%
-  select(Date, wtr_6.2, wtr_8) %>%
+  select(Date, wtr_6.2, wtr_8, wtr_9, wtr_9.5) %>%
   # writing over the columns but should be okay because don't then use
   # that column in the next mutate
-  mutate(wtr_6.2 = wtr_6.2 + wtr_8, # box = 4 m
-         wtr_8 = wtr_8)                # box = 6 m
+  mutate(wtr_6.2 = wtr_6.2 + wtr_8 + wtr_9, # box = 4 m
+         wtr_8 = wtr_8 + wtr_9 + wtr_9.5,
+         wtr_9 = wtr_9 + wtr_9.5)     %>%
+  select(-wtr_9.5)# box = 6 m
 
 #=========================================#
 #### bottom of the equation ####
@@ -117,8 +120,9 @@ Gi <- dailyT %>% mutate(wtr_0 = wtr_0-wtr_1.6/1.6,
                         wtr_3.8 = wtr_3.8-wtr_5/1.2,
                         wtr_5 = wtr_5-wtr_6.2/1.2,
                         wtr_6.2 = wtr_6.2-wtr_8/1.8,
-                        wtr_8 = wtr_8-wtr_9/1) %>%
-  select(-wtr_9)
+                        wtr_8 = wtr_8-wtr_9/1,
+                        wtr_9 = wtr_9-wtr_9.5/.5,) %>%
+  select(-wtr_9.5)
 
 # use the boundary values as column names
 # only 1.5 - 5.5m
@@ -135,7 +139,7 @@ Gi_Ai <- Gi %>%
   as_tibble() %>%
   mutate_if(is.numeric, Gi.Ai) %>%
   # only valid for the deeper layers
-  select(Date, wtr_6.2, wtr_8)
+  select(Date, wtr_6.2, wtr_8, wtr_9)
 
 #=====================================#
 
@@ -150,7 +154,7 @@ colnames(Kz_ghf) <- c("Date", paste0("Kz_", gsub("wtr_", "", colnames(Gi_Ai[-1])
 
 # check the output
 Kz_ghf %>%
-  pivot_longer(cols = Kz_6.2:Kz_8,
+  pivot_longer(cols = Kz_6.2:Kz_9,
                names_to = "depth",
                names_prefix = "Kz_", 
                values_to = "Kz") %>%
@@ -160,7 +164,7 @@ Kz_ghf %>%
   theme(axis.text.x = element_text(angle = 90))
 
 # Kz values cannot be less than the rate of molecular diffusion
-rate_diffusion <- 1.4e-7
+rate_diffusion <- 0
 
 Kz_ghf <- Kz_ghf %>%
   # if value is less than molecular diffusion set to rate of diffusion
@@ -210,6 +214,6 @@ p_box <- p %>%
 
 # write the Kz values
 write.table(Kz_ghf, sep = "\t", row.names = F, quote = F,
-            file = "Kz (gradient heat flux method).txt")
+            file = "Kz gradient heat flux method.csv")
 
 #============================================#
